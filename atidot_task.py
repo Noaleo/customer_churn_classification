@@ -79,6 +79,7 @@ def encode_categorical_features(df, cols_to_encode: list):
 @log_step
 def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     # TODO check the below and add documentation
+    # todo add more features such as mode of plan_type per user how many months he's using each of the plans?
     df['transaction_7d_avg'] = df.groupby('customer_id')['transaction_amount'].transform(
         lambda x: x.rolling(window=7, min_periods=1).mean())
     df['transaction_30d_avg'] = df.groupby('customer_id')['transaction_amount'].transform(
@@ -203,14 +204,14 @@ if __name__ == "__main__":
     # model_2M = train_model(X_train, y_train_2M, X_val, y_val_2M)
 
     # Add this step after training each model
-    plot_feature_importance(model_1M, X_train.columns, "Feature Importance for 1M Churn Model")
+    # plot_feature_importance(model_1M, X_train.columns, "Feature Importance for 1M Churn Model")
     # plot_feature_importance(model_2M, X_train.columns, "Feature Importance for 2M Churn Model")
 
     metrics_1M = evaluate_model(model_1M, X_val, y_val_1M)
     # metrics_2M = evaluate_model(model_2M, X_val, y_val_2M)
 
     with open(metrics_path, 'w') as f:
-        json.dump({'1M': metrics_1M})#, '2M': metrics_2M}, f)
+        json.dump({'1M': metrics_1M}, f)#, '2M': metrics_2M}, f)
 
     save_model(model_1M, model_path_1M)
     # save_model(model_2M, model_path_2M)
