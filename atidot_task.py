@@ -141,9 +141,9 @@ def train_test_valid_split(df: pd.DataFrame):
 @log_step
 def train_model(X_train, y_train, X_val, y_val):
     param_grid = {
-        'n_estimators': [80, 100, 120],
-        'learning_rate': [0.15, 0.2, 0.25],
-        'max_depth': [5, 7, 9]
+        'n_estimators': [70, 75, 85],
+        'learning_rate': [0.2, 0.25, 0.3],
+        'max_depth': [7, 9, 11]
     }
 
     model = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42)
@@ -162,7 +162,12 @@ def evaluate_model(model, X_val, y_val):
     precision = precision_score(y_val, y_pred_)
     recall = recall_score(y_val, y_pred_)
     class_report = classification_report(y_val, y_pred_)
-    return {'precision': precision, 'recall': recall, 'classification_report': class_report}
+
+    return {
+        'precision': precision,
+        'recall': recall,
+        'classification_report': class_report
+    }
 
 
 @log_step
