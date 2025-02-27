@@ -6,7 +6,7 @@ import pandas as pd
 from sklearn.model_selection import GridSearchCV
 from xgboost import XGBClassifier
 import json
-from sklearn.metrics import precision_score, recall_score
+from sklearn.metrics import precision_score, recall_score, classification_report
 import matplotlib.pyplot as plt
 
 # Paths
@@ -158,11 +158,11 @@ def train_model(X_train, y_train, X_val, y_val):
 
 @log_step
 def evaluate_model(model, X_val, y_val):
-    y_pred_test = model.predict(X_val)
-    # todo in the shift we got some nan. fix it
-    precision = precision_score(y_val, y_pred_test)
-    recall = recall_score(y_val, y_pred_test)
-    return {'precision': precision, 'recall': recall}
+    y_pred_ = model.predict(X_val)
+    precision = precision_score(y_val, y_pred_)
+    recall = recall_score(y_val, y_pred_)
+    class_report = classification_report(y_val, y_pred_)
+    return {'precision': precision, 'recall': recall, 'classification_report': class_report}
 
 
 @log_step
