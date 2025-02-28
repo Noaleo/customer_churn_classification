@@ -78,13 +78,14 @@ def encode_categorical_features(df, cols_to_encode: list):
 
 @log_step
 def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
-    # TODO check the below and add documentation
     # todo add more features such as mode of plan_type per user how many months he's using each of the plans?
-    df['transaction_7d_avg'] = df.groupby('customer_id')['transaction_amount'].transform(
+    df['transaction_7m_avg'] = df.groupby('customer_id')['transaction_amount'].transform(
         lambda x: x.rolling(window=7, min_periods=1).mean())
-    df['transaction_30d_avg'] = df.groupby('customer_id')['transaction_amount'].transform(
-        lambda x: x.rolling(window=30, min_periods=1).mean())
-    df['days_since_last_txn'] = df.groupby('customer_id')['date'].transform(lambda x: (x - x.shift()).dt.days.fillna(0))
+    df['transaction_3m_avg'] = df.groupby('customer_id')['transaction_amount'].transform(
+        lambda x: x.rolling(window=3, min_periods=1).mean())
+
+    # todo consider calculate this feature after the train-test-val-split?
+    df['plan_type_mode'] = df.groupby('customer_id', sort=False)['plan_type'].agg(lambda x: x.mode()[0])
 
     return df
 
