@@ -231,8 +231,9 @@ def generate_final_predictions(X_pred_2):
     Generates final prediction --> if churn is 1 in any of the dates --> then churn
     # todo: next step, take approximate value of % of churn and take the k most % to leave?
     """
-    X_pred_2.loc[:, 'final_prediction'] = X_pred_2.groupby('customer_id', sort=False)['prediction'].max()
-    # X_pred_2.to_csv(predictions_path, index=False)
+    final_pred = X_pred_2.groupby('customer_id', sort=False)['prediction'].max()
+    X_pred_2.merge(final_pred, on='customer_id')
+
     return X_pred_2
 
 if __name__ == "__main__":
