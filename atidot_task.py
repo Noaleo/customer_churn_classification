@@ -10,12 +10,10 @@ from sklearn.metrics import precision_score, recall_score, classification_report
 import matplotlib.pyplot as plt
 
 # Paths
+os.chdir("..")
 os.makedirs("output", exist_ok=True)
-file_name = "churn_data.csv"
-model_path_1M = "output/model_1M.pkl"
-model_path_2M = "output/model_2M.pkl"
-predictions_path = "data/predictions.csv"
-metrics_path = "output/metrics.json"
+file_name = "data/churn_data.csv"
+predictions_path = "output/predictions.csv"
 
 def log_step(func):
     @functools.wraps(func)
@@ -29,7 +27,34 @@ def log_step(func):
         return result
     return wrapper
 
-# Load Data
+@log_step
+def run(n_shift: int):
+    """
+    activates all the relevant methods to train a model, test it & predict on it.
+    """
+    df = load_data()
+    df = preprocess_data(df, n_shift)
+    X_train, y_train, X_val, y_val, X_test, df_test = train_test_valid_split(df, n_shift=n_shift)
+    model = train_model(X_train, y_train, X_val, y_val)
+
+    # plot_feature_importance(model, X_train.columns, f'Feature Importance for {1}M Churn Model')
+
+    metrics = evaluate_model(model, X_val, y_val)
+    print(metrics)
+    metrics_path = f'output/metrics_{n_shift}M.json'
+    with open(metrics_path, 'w') as f:
+        json.dump({f'{n_shift}M': metrics}, f)
+
+    model_path = f'output/model_{n_shift}M.pkl'
+    save_model(model, model_path)
+
+    X_predictions = generate_predictions(model, X_test, df_test)
+    X_pred_2 = generate_final_predictions(X_predictions)
+    df = df.merge(X_pred_2, on=['customer_id', 'date'])
+    df.to_csv(predictions_path, index=False)
+    print("🎉 Pipeline complete: Models trained, evaluated, and predictions saved.")
+
+
 @log_step
 def load_data():
     df = pd.read_csv(file_name, parse_dates=['date'])
@@ -54,7 +79,7 @@ def create_time_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     create date features
     """
-    df['day_of_week'] = df['date'].dt.dayofweek
+    df['quarter'] = df['date'].dt.quarter
     df['month'] = df['date'].dt.month
 
     return df
@@ -62,10 +87,7 @@ def create_time_features(df: pd.DataFrame) -> pd.DataFrame:
 @log_step
 def encode_categorical_features(df, cols_to_encode: list):
     """
-
-    :param df:
-    :param cols_to_encode:
-    :return:
+    encode cateroical features --> we have only 1 with less than 5 values so no need to implement the OHE
     """
     for col in cols_to_encode:
         if df[col].nunique() < 5:
@@ -78,78 +100,85 @@ def encode_categorical_features(df, cols_to_encode: list):
 
 @log_step
 def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
-    # todo add more features such as mode of plan_type per user how many months he's using each of the plans?
-    df['transaction_7m_avg'] = df.groupby('customer_id')['transaction_amount'].transform(
-        lambda x: x.rolling(window=7, min_periods=1).mean())
-    df['transaction_3m_avg'] = df.groupby('customer_id')['transaction_amount'].transform(
-        lambda x: x.rolling(window=3, min_periods=1).mean())
+
+    df = create_time_features(df)
+
+    for i in range(3, 8):
+        col_name = f'transaction_{i}m_avg'
+        df[col_name] = df.groupby('customer_id')['transaction_amount'].transform(
+            lambda x: x.rolling(window=i, min_periods=1).mean())
 
     # todo consider calculate this feature after the train-test-val-split?
     df['plan_type_mode'] = df.groupby('customer_id', sort=False)['plan_type'].agg(lambda x: x.mode()[0])
+    plan_counts = df.groupby(['customer_id', 'plan_type'], sort=False)['date'].nunique().unstack(fill_value=0)
+    plan_counts.columns = [f'plan_{col}_months' for col in plan_counts.columns]  # Rename columns
+    df = df.merge(plan_counts, on='customer_id')
+    return df
+
+@log_step
+def shift_label(df: pd.DataFrame, n_shift: int):
+    """
+    shift the label n_shift forward so that each month predict the label n_shist month forward
+    """
+    new_label_name = f'churn_{n_shift}M'
+    df[new_label_name] = df.groupby('customer_id')['churn'].shift(-n_shift)
 
     return df
 
 @log_step
-def shift_churn(df: pd.DataFrame):
+def preprocess_data(df: pd.DataFrame, n_shift: int) -> pd.DataFrame:
     """
-    todo make sure to remove of df_churn_1 the first month and for df_churn_2 the first 2 months
-    # in the train-test-split?
-    todo add documentation -- we shift the target 1/2 months backward so its row contain its 'predicted' label
-    todo fix it --> when we shift 1 month then x_val is ok, when we shift 2 months then we need to change x_val to contain different dates
+    fillnan, feature engineering, shift the churn column & encodings
     """
-    df['churn_1M'] = df.groupby('customer_id')['churn'].shift(-1)
-    df['churn_2M'] = df.groupby('customer_id')['churn'].shift(-2)
-
-    return df
-
-@log_step
-def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    create date features
-    """
+    df = shift_label(df, n_shift=n_shift)
     df = fill_nan(df)
-    df = create_time_features(df)
-
     cols_to_encode = df.select_dtypes('object')
     df = encode_categorical_features(df, cols_to_encode)
-
     df = feature_engineering(df)
-    df = shift_churn(df)
 
     return df
 
 @log_step
-def train_test_valid_split(df: pd.DataFrame):
+def train_test_valid_split(df: pd.DataFrame, n_shift: int):
     """
-    split the data to train-test-valid:
-        - train contains january-october
-        - valid contain november
-        - test contain december
+    split the data to train-test-valid based on n_shift (1|2):
+        - train until september/october
+        - valid contain october/november
+        - test contain november/december
     :return: X_train, X_val, X_test, y_train, y_val, y_test
     """
-    df_train = df[df['date'] < '2023-11-01']
-    df_val = df[(df['date'] >= '2023-11-01') & (df['date'] < '2023-12-01')]
-    df_test = df[df['date'] >= '2023-12-01']
-    cols_to_drop = ['customer_id', 'date', 'churn', 'churn_1M', 'churn_2M']
+    churn_col = f'churn_{n_shift}M'
+    if n_shift == 1:
+
+        df_train = df[df['date'] < '2023-11-01']
+        df_val = df[(df['date'] >= '2023-11-01') & (df['date'] < '2023-12-01')]
+        df_test = df[df['date'] >= '2023-12-01']
+
+    elif n_shift == 2:
+        df_train = df[df['date'] < '2023-10-01']
+        df_val = df[(df['date'] >= '2023-10-01') & (df['date'] < '2023-11-01')]
+        df_test = df[df['date'] >= '2023-11-01']
+
+    cols_to_drop = ['customer_id', 'date', 'churn', churn_col]
 
 
-    X_train, y_train_1M, y_train_2M = df_train.drop(columns=cols_to_drop), df_train['churn_1M'], df_train['churn_2M']
-    X_val, y_val_1M, y_val_2M = df_val.drop(columns=cols_to_drop), df_val['churn_1M'], df_val['churn_2M']
+    X_train, y_train, = df_train.drop(columns=cols_to_drop), df_train[churn_col]
+    X_val, y_val = df_val.drop(columns=cols_to_drop), df_val[churn_col]
     X_test = df_test.drop(columns=cols_to_drop)
 
-    return X_train, y_train_1M, y_train_2M, X_val, y_val_1M, y_val_2M, X_test, df_test
+    return X_train, y_train, X_val, y_val, X_test, df_test
 
 
 @log_step
 def train_model(X_train, y_train, X_val, y_val):
     param_grid = {
-        'n_estimators': [70, 75, 85],
-        'learning_rate': [0.2, 0.25, 0.3],
-        'max_depth': [7, 9, 11]
+        'n_estimators': [82, 83, 84],
+        'learning_rate': [0.26, 0.27, 0.28],
+        'max_depth': [5, 6, 7]
     }
 
     model = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42)
-    grid_search = GridSearchCV(model, param_grid, cv=3, scoring='recall', verbose=1)
+    grid_search = GridSearchCV(model, param_grid, cv=10, scoring='recall', verbose=1)
     grid_search.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=True)
 
     print(f"Best Parameters: {grid_search.best_params_}")
@@ -163,12 +192,12 @@ def evaluate_model(model, X_val, y_val):
     y_pred_ = model.predict(X_val)
     precision = precision_score(y_val, y_pred_)
     recall = recall_score(y_val, y_pred_)
-    class_report = classification_report(y_val, y_pred_)
+    # class_report = classification_report(y_val, y_pred_, output_dict=True)
 
     return {
         'precision': precision,
         'recall': recall,
-        'classification_report': class_report
+        # 'classification_report': class_report
     }
 
 
@@ -178,8 +207,9 @@ def save_model(model, path):
 
 @log_step
 def generate_predictions(model, X_test, df_test):
-    df_test['prediction'] = model.predict(X_test)
-    df_test.to_csv(predictions_path, index=False)
+    df_test.loc[:, 'prediction'] = model.predict(X_test)
+
+    return df_test[['customer_id', 'date', 'prediction']]
 
 @log_step
 def plot_feature_importance(model, feature_names, title):
@@ -193,31 +223,20 @@ def plot_feature_importance(model, feature_names, title):
     plt.ylabel('Feature')
     plt.title(title)
     plt.gca().invert_yaxis()
+    plt.savefig('output/feature_importance', bbox_inches="tight")
     plt.show()
 
+def generate_final_predictions(X_pred_2):
+    """
+    Generates final prediction --> if churn is 1 in any of the dates --> then churn
+    # todo: next step, take approximate value of % of churn and take the k most % to leave?
+    """
+    X_pred_2.loc[:, 'final_prediction'] = X_pred_2.groupby('customer_id', sort=False)['prediction'].max()
+    # X_pred_2.to_csv(predictions_path, index=False)
+    return X_pred_2
 
 if __name__ == "__main__":
-    df = load_data()
-    df = preprocess_data(df)
-    X_train, y_train_1M, y_train_2M, X_val, y_val_1M, y_val_2M, X_test, df_test = train_test_valid_split(df)
 
-    model_1M = train_model(X_train, y_train_1M, X_val, y_val_1M)
-    # model_2M = train_model(X_train, y_train_2M, X_val, y_val_2M)
+    # X_pred_1 = run(n_shift=1)
+    run(n_shift=2)
 
-    # Add this step after training each model
-    # plot_feature_importance(model_1M, X_train.columns, "Feature Importance for 1M Churn Model")
-    # plot_feature_importance(model_2M, X_train.columns, "Feature Importance for 2M Churn Model")
-
-    metrics_1M = evaluate_model(model_1M, X_val, y_val_1M)
-    # metrics_2M = evaluate_model(model_2M, X_val, y_val_2M)
-
-    with open(metrics_path, 'w') as f:
-        json.dump({'1M': metrics_1M}, f)#, '2M': metrics_2M}, f)
-
-    save_model(model_1M, model_path_1M)
-    # save_model(model_2M, model_path_2M)
-
-    generate_predictions(model_1M, X_test, df_test, 'prediction_1M')
-    # generate_predictions(model_2M, X_test, df_test, 'prediction_2M')
-
-    print("🎉 Pipeline complete: Models trained, evaluated, and predictions saved.")
