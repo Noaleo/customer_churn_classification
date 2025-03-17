@@ -17,7 +17,7 @@
     |   |-- predictions.csv        # Final predictions
     |   |-- metrics_1M.json        # Model evaluation metrics for 1M shift
     |   |-- metrics_2M.json        # Model evaluation metrics for 2M shift
-    |-- atidot_task.py                    # Main script to execute the pipeline
+    |-- main.py                    # Main script to execute the pipeline
     |-- README.md    
     
 ### Setup
